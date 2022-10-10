@@ -688,6 +688,21 @@ int acpi_pci_link_free_irq(acpi_handle handle)
 	return (link->irq.active);
 }
 
+int is_bsp_primary=0;
+
+unsigned int lapic_is_primary(void)
+{
+	unsigned int msr, msr2;
+
+	rdmsr(MSR_IA32_APICBASE, msr, msr2);
+	msr &= MSR_IA32_APICBASE_BSP;
+
+	if (!is_bsp_primary && msr)
+		is_bsp_primary = msr;
+
+	return msr;
+}
+
 /* --------------------------------------------------------------------------
                                  Driver Interface
    -------------------------------------------------------------------------- */
@@ -740,7 +755,8 @@ static int acpi_pci_link_add(struct acpi_device *device)
 
       end:
 	/* disable all links -- to be activated on use */
-	acpi_evaluate_object(device->handle, "_DIS", NULL, NULL);
+	if ( !(!lapic_is_primary()) || is_bsp_primary)
+		acpi_evaluate_object(device->handle, "_DIS", NULL, NULL);
 	mutex_unlock(&acpi_link_lock);
 
 	if (result)
