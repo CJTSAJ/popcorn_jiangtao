@@ -170,8 +170,10 @@ void __init setup_per_cpu_areas(void)
 	unsigned long delta;
 	int rc;
 
-	pr_info("NR_CPUS:%d nr_cpumask_bits:%d nr_cpu_ids:%d nr_node_ids:%d\n",
-		NR_CPUS, nr_cpumask_bits, nr_cpu_ids, nr_node_ids);
+/*	pr_info("NR_CPUS:%d nr_cpumask_bits:%d nr_cpu_ids:%d nr_node_ids:%d\n",
+			NR_CPUS, nr_cpumask_bits, nr_cpu_ids, nr_node_ids);
+*/	printk("%s NR_CPUS:%d nr_cpumask_bits:%d nr_cpu_ids:%d nr_node_ids:%d\n",
+			__func__, NR_CPUS, nr_cpumask_bits, nr_cpu_ids, nr_node_ids);
 
 	/*
 	 * Allocate percpu area.  Embedding allocator is our favorite;
@@ -206,12 +208,19 @@ void __init setup_per_cpu_areas(void)
 
 	/* alrighty, percpu areas up and running */
 	delta = (unsigned long)pcpu_base_addr - (unsigned long)__per_cpu_start;
+	printk("%s delta=%lx pcpu_base_addr=%lx __per_cpu_start=%lx\n",
+			__func__, delta, (unsigned long)pcpu_base_addr, (unsigned long)__per_cpu_start);
 	for_each_possible_cpu(cpu) {
 		per_cpu_offset(cpu) = delta + pcpu_unit_offsets[cpu];
 		per_cpu(this_cpu_off, cpu) = per_cpu_offset(cpu);
 		per_cpu(cpu_number, cpu) = cpu;
-		setup_percpu_segment(cpu);
-		setup_stack_canary_segment(cpu);
+/*		pr_info("CPU%d per_cpu_offset=%x this_cpu_off=%x cpu_number=%d\n",
+				cpu, per_cpu_offset(cpu), per_cpu(this_cpu_off, cpu), per_cpu(cpu_number, cpu));
+*/		printk("%s CPU%d per_cpu_offset=%lx unit_off=%lx cpu_number=%d\n",
+				__func__, cpu, per_cpu_offset(cpu), pcpu_unit_offsets[cpu], per_cpu(cpu_number, cpu));
+
+		setup_percpu_segment(cpu); // only 32bit
+		setup_stack_canary_segment(cpu); // only 32bit
 		/*
 		 * Copy data used in early init routines from the
 		 * initial arrays to the per cpu data areas.  These
@@ -224,6 +233,8 @@ void __init setup_per_cpu_areas(void)
 			early_per_cpu_map(x86_cpu_to_apicid, cpu);
 		per_cpu(x86_bios_cpu_apicid, cpu) =
 			early_per_cpu_map(x86_bios_cpu_apicid, cpu);
+		printk("%s: cpu %d x86_cpu_to_apicid %d x86_bios_cpu_apicid %d\n", __func__, cpu,
+				early_per_cpu_map(x86_cpu_to_apicid, cpu), early_per_cpu_map(x86_bios_cpu_apicid, cpu));
 #endif
 #ifdef CONFIG_X86_32
 		per_cpu(x86_cpu_to_logical_apicid, cpu) =
@@ -247,12 +258,19 @@ void __init setup_per_cpu_areas(void)
 		 */
 		set_cpu_numa_node(cpu, early_cpu_to_node(cpu));
 #endif
+
 		/*
 		 * Up to this point, the boot CPU has been using .init.data
 		 * area.  Reload any changed state for the boot CPU.
 		 */
-		if (!cpu)
-			switch_to_new_gdt(cpu);
+		/* POPCORN -- This will happen ONLY if the CPU is booting 
+		 * CPU that do not have to be the ZERO */
+		//if (!cpu) // PREVIOUS CODE
+		if ((read_apic_id() == boot_cpu_physical_apicid)
+				&& (cpu == first_cpu(cpu_present_map))) {
+			printk("boot cpu physical acpiid %d\n", cpu);
+			switch_to_new_gdt(cpu); 
+		}
 	}
 
 	/* indicate the early static arrays will soon be gone */

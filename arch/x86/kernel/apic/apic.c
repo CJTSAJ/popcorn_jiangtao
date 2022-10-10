@@ -34,6 +34,7 @@
 #include <linux/dmi.h>
 #include <linux/smp.h>
 #include <linux/mm.h>
+#include <linux/multikernel.h>
 
 #include <asm/perf_event.h>
 #include <asm/x86_init.h>
@@ -54,7 +55,7 @@
 #include <asm/tsc.h>
 #include <asm/hypervisor.h>
 
-unsigned int num_processors;
+unsigned int num_processors = 0;
 
 unsigned disabled_cpus __cpuinitdata;
 
@@ -281,6 +282,21 @@ int get_physical_broadcast(void)
 	return modern_apic() ? 0xff : 0xf;
 }
 #endif
+
+int is_bsp_cluster=0;
+
+unsigned int lapic_is_bsp(void)
+{
+	unsigned int msr, msr2;
+
+	rdmsr(MSR_IA32_APICBASE, msr, msr2);
+	msr &= MSR_IA32_APICBASE_BSP;
+	
+	if (!is_bsp_cluster && msr)
+	  is_bsp_cluster = msr;
+
+	return msr;
+}
 
 /**
  * lapic_get_maxlvt - get the maximum number of local vector table entries
@@ -1994,8 +2010,8 @@ void __cpuinit generic_processor_info(int apicid, int version)
 		return;
 	}
 
-	num_processors++;
-	if (apicid == boot_cpu_physical_apicid) {
+	cpu = num_processors++;
+//	if (apicid == boot_cpu_physical_apicid) {
 		/*
 		 * x86_bios_cpu_apicid is required to have processors listed
 		 * in same order as logical cpu numbers. Hence the first
@@ -2003,9 +2019,9 @@ void __cpuinit generic_processor_info(int apicid, int version)
 		 * boot_cpu_init() already hold bit 0 in cpu_present_mask
 		 * for BSP.
 		 */
-		cpu = 0;
-	} else
-		cpu = cpumask_next_zero(-1, cpu_present_mask);
+//		cpu = 0;
+//	} else
+//		cpu = cpumask_next_zero(-1, cpu_present_mask);
 
 	/*
 	 * Validate version
@@ -2364,6 +2380,14 @@ static int __init parse_nolapic_timer(char *arg)
 	return 0;
 }
 early_param("nolapic_timer", parse_nolapic_timer);
+
+static int __init parse_lapic_timer(char *arg)
+{
+	lapic_timer_frequency = simple_strtoul(arg, NULL, 0); // set the value
+	pr_info("APIC: lapic_timer_frequency set to %d\n", lapic_timer_frequency);
+	return 0;
+}
+early_param("lapic_timer", parse_lapic_timer);
 
 static int __init apic_set_verbosity(char *arg)
 {

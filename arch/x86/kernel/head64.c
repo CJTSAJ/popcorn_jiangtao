@@ -27,6 +27,11 @@
 #include <asm/trampoline.h>
 #include <asm/bios_ebda.h>
 
+#include <linux/module.h>
+
+unsigned long orig_boot_params;
+EXPORT_SYMBOL(orig_boot_params);
+
 static void __init zap_identity_mappings(void)
 {
 	pgd_t *pgd = pgd_offset_k(0UL);
@@ -77,7 +82,7 @@ void __init x86_64_start_kernel(char * real_mode_data)
 	/* Make NULL pointers segfault */
 	zap_identity_mappings();
 
-	max_pfn_mapped = KERNEL_IMAGE_SIZE >> PAGE_SHIFT;
+	max_pfn_mapped = (KERNEL_IMAGE_SIZE >> PAGE_SHIFT) * 256;
 
 	for (i = 0; i < NUM_EXCEPTION_VECTORS; i++) {
 #ifdef CONFIG_EARLY_PRINTK
@@ -91,6 +96,8 @@ void __init x86_64_start_kernel(char * real_mode_data)
 	if (console_loglevel == 10)
 		early_printk("Kernel alive\n");
 
+	orig_boot_params = real_mode_data;
+
 	x86_64_start_reservations(real_mode_data);
 }
 
@@ -103,12 +110,25 @@ void __init x86_64_start_reservations(char *real_mode_data)
 	memblock_x86_reserve_range(__pa_symbol(&_text), __pa_symbol(&__bss_stop), "TEXT DATA BSS");
 
 #ifdef CONFIG_BLK_DEV_INITRD
+#define RAMDISK_MAGIC 0xdf
 	/* Reserve INITRD */
 	if (boot_params.hdr.type_of_loader && boot_params.hdr.ramdisk_image) {
 		/* Assume only end is not page aligned */
-		unsigned long ramdisk_image = boot_params.hdr.ramdisk_image;
+		unsigned long ramdisk_shift = boot_params.hdr.ramdisk_shift;
+		unsigned long ramdisk_image;
 		unsigned long ramdisk_size  = boot_params.hdr.ramdisk_size;
-		unsigned long ramdisk_end   = PAGE_ALIGN(ramdisk_image + ramdisk_size);
+		unsigned long ramdisk_end;
+	
+		/* POPCORN -- the BIOS might not zero out the ramdisk_shift
+		   field, so we need to account for it */
+		if (boot_params.hdr.ramdisk_magic == RAMDISK_MAGIC) {
+			ramdisk_image = boot_params.hdr.ramdisk_image + (ramdisk_shift << 32);
+		} else {
+			ramdisk_image = boot_params.hdr.ramdisk_image;
+		}
+
+		ramdisk_end = PAGE_ALIGN(ramdisk_image + ramdisk_size);
+
 		memblock_x86_reserve_range(ramdisk_image, ramdisk_end, "RAMDISK");
 	}
 #endif

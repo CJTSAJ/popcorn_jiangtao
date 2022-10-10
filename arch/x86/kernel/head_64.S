@@ -103,6 +103,8 @@ startup_64:
 	andq	$(PTRS_PER_PUD - 1), %rax
 	jz	ident_complete
 
+	/* MKLINUX -- Set the appropriate entry of level3_ident_pgt to 
+	 * point to level2_spare_pgt */
 	leaq	(level2_spare_pgt - __START_KERNEL_map + _KERNPG_TABLE)(%rbp), %rdx
 	leaq	level3_ident_pgt(%rip), %rbx
 	movq	%rdx, 0(%rbx, %rax, 8)
@@ -110,9 +112,24 @@ startup_64:
 	movq	%rdi, %rax
 	shrq	$PMD_SHIFT, %rax
 	andq	$(PTRS_PER_PMD - 1), %rax
+
+	/* MKLINUX -- at this point, %rax should be 0x0
+	 * and %rdi should be rounded down to a multiple of 1 GB */
+	movq    $0, %rax
+	andq    $0xffffffffc0000000, %rdi
+
+	/* MKLINUX -- fill up level2_spare_pgt to map the 1 GB where the
+	 * kernel has been loaded */
+	movq	$512, %rcx
 	leaq	__PAGE_KERNEL_IDENT_LARGE_EXEC(%rdi), %rdx
 	leaq	level2_spare_pgt(%rip), %rbx
-	movq	%rdx, 0(%rbx, %rax, 8)
+
+1:	movq	%rdx, 0(%rbx, %rax, 8)
+	addq	$0x00200000, %rdx
+	incq	%rax
+	decq    %rcx
+        jnz     1b
+
 ident_complete:
 
 	/*
@@ -237,6 +254,7 @@ ENTRY(secondary_startup_64)
 	movl	initial_gs+4(%rip),%edx
 	wrmsr	
 
+	/* MKLINUX -- note that esi contains the pointer to the boot_params structure! */
 	/* esi is pointer to real mode structure with interesting info.
 	   pass it to C */
 	movl	%esi, %edi

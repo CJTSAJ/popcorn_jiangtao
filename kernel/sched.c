@@ -72,6 +72,7 @@
 #include <linux/ftrace.h>
 #include <linux/slab.h>
 #include <linux/init_task.h>
+#include <linux/process_server.h>
 
 #include <asm/tlb.h>
 #include <asm/irq_regs.h>
@@ -3261,6 +3262,8 @@ static inline void post_schedule(struct rq *rq)
 asmlinkage void schedule_tail(struct task_struct *prev)
 	__releases(rq->lock)
 {
+
+
 	struct rq *rq = this_rq();
 
 	finish_task_switch(rq, prev);
@@ -3277,6 +3280,13 @@ asmlinkage void schedule_tail(struct task_struct *prev)
 #endif
 	if (current->set_child_tid)
 		put_user(task_pid_vnr(current), current->set_child_tid);
+
+	// Multikernel
+    if(current->represents_remote) {
+        printk("Sleeping %d\n",current->pid);
+        set_current_state( TASK_INTERRUPTIBLE);
+        schedule();
+    }
 }
 
 /*
@@ -5546,6 +5556,8 @@ long sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
 	cpumask_var_t cpus_allowed, new_mask;
 	struct task_struct *p;
 	int retval;
+    int current_cpu = smp_processor_id();
+    int i;
 
 	get_online_cpus();
 	rcu_read_lock();
@@ -5556,6 +5568,30 @@ long sched_setaffinity(pid_t pid, const struct cpumask *in_mask)
 		put_online_cpus();
 		return -ESRCH;
 	}
+	pid = current->pid;
+
+// TODO migration must be removed from here
+    /*
+     * Multikernel
+     */
+    // For now, migrate to the first cpu in the mask that
+    // is not the current cpu
+    for(i = 0; i < NR_CPUS; i++) {
+        if( (cpu_isset(i,*in_mask) ) && (current_cpu != i) ) {
+            // do the migration
+	    get_task_struct(p);
+	    rcu_read_unlock();
+            process_server_do_migration(p,i);
+	    put_task_struct(p);
+	    put_online_cpus();
+
+	    //while (1) {
+	      schedule(); // this will save us from death
+	    //}
+	    
+            return 0;
+        }
+    }
 
 	/* Prevent p going away */
 	get_task_struct(p);

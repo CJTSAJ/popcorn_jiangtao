@@ -1129,12 +1129,12 @@ static void pcpu_dump_alloc_info(const char *lvl,
 				printk("\n");
 				printk("%spcpu-alloc: ", lvl);
 			}
-			printk("[%0*d] ", group_width, group);
+			printk("[%0*d] ", group_width, group); // print group id
 
 			for (unit_end += upa; unit < unit_end; unit++)
 				if (gi->cpu_map[unit] != NR_CPUS)
 					printk("%0*d ", cpu_width,
-					       gi->cpu_map[unit]);
+					       gi->cpu_map[unit]); // print cpuid of each element in the group
 				else
 					printk("%s ", empty_str);
 		}
@@ -1471,7 +1471,8 @@ static struct pcpu_alloc_info * __init pcpu_build_alloc_info(
 	/* group cpus according to their proximity */
 	for_each_possible_cpu(cpu) {
 		group = 0;
-	next_group:
+	/* POPCORN -- this should be commented out */
+/*	next_group:
 		for_each_possible_cpu(tcpu) {
 			if (cpu == tcpu)
 				break;
@@ -1483,7 +1484,7 @@ static struct pcpu_alloc_info * __init pcpu_build_alloc_info(
 				goto next_group;
 			}
 		}
-		group_map[cpu] = group;
+*/		group_map[cpu] = group;
 		group_cnt[group]++;
 	}
 

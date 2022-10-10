@@ -68,6 +68,12 @@
 #include <linux/khugepaged.h>
 #include <linux/signalfd.h>
 
+/**
+ * DK
+ */
+#include <linux/process_server.h>
+#include <linux/sched.h>
+
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/uaccess.h>
@@ -1535,19 +1541,24 @@ long do_fork(unsigned long clone_flags,
 		 * and set the child going.
 		 */
 		p->flags &= ~PF_STARTING;
-
+        
+        p->represents_remote = 0;
+        p->executing_for_remote = 0;
+        p->clone_flags = clone_flags;
 		wake_up_new_task(p);
 
-		/* forking complete and child started to run, tell ptracer */
-		if (unlikely(trace))
-			ptrace_event(trace, nr);
+        /* forking complete and child started to run, tell ptracer */
+        if (unlikely(trace))
+            ptrace_event(trace, nr);
 
-		if (clone_flags & CLONE_VFORK) {
-			freezer_do_not_count();
-			wait_for_completion(&vfork);
-			freezer_count();
-			ptrace_event(PTRACE_EVENT_VFORK_DONE, nr);
-		}
+        if (clone_flags & CLONE_VFORK) {
+            freezer_do_not_count();
+            wait_for_completion(&vfork);
+            freezer_count();
+            ptrace_event(PTRACE_EVENT_VFORK_DONE, nr);
+        }
+
+
 	} else {
 		nr = PTR_ERR(p);
 	}

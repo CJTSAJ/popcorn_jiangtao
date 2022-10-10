@@ -32,6 +32,7 @@
 #include <linux/elf.h>
 #include <linux/utsname.h>
 #include <linux/coredump.h>
+#include <linux/process_server.h>
 #include <asm/uaccess.h>
 #include <asm/param.h>
 #include <asm/page.h>
@@ -577,13 +578,14 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 		struct elfhdr elf_ex;
 		struct elfhdr interp_elf_ex;
 	} *loc;
+    unsigned long mk_sp, mk_ip;
 
 	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
 	if (!loc) {
 		retval = -ENOMEM;
 		goto out_ret;
 	}
-	
+
 	/* Get the exec-header */
 	loc->elf_ex = *((struct elfhdr *)bprm->buf);
 
@@ -736,7 +738,7 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 		send_sig(SIGKILL, current, 0);
 		goto out_free_dentry;
 	}
-	
+
 	current->mm->start_stack = bprm->p;
 
 	/* Now we do a little grungy work by mmapping the ELF image into
@@ -935,12 +937,15 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 
 	install_exec_creds(bprm);
 	current->flags &= ~PF_FORKNOEXEC;
-	retval = create_elf_tables(bprm, &loc->elf_ex,
+	if(!current->executing_for_remote) {
+        retval = create_elf_tables(bprm, &loc->elf_ex,
 			  load_addr, interp_load_addr);
-	if (retval < 0) {
-		send_sig(SIGKILL, current, 0);
-		goto out;
-	}
+	    if (retval < 0) {
+		    send_sig(SIGKILL, current, 0);
+		    goto out;
+	    }
+    }
+
 	/* N.B. passed_fileno might not be initialized? */
 	current->mm->end_code = end_code;
 	current->mm->start_code = start_code;
@@ -982,8 +987,20 @@ static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 	 */
 	ELF_PLAT_INIT(regs, reloc_func_desc);
 #endif
-
-	start_thread(regs, elf_entry, bprm->p);
+   
+    /*
+     * Multikernel
+     */
+    if(current->executing_for_remote) {
+        process_server_import_address_space(&mk_ip, &mk_sp, regs);
+        /*printk("stack pointer = %lx\n",mk_sp);
+        for(i = 0; i <= 16; i++) {
+            printk("stack peak %lx at %lx\n",*(unsigned long*)(mk_sp + i*8), mk_sp + i*8);
+        }*/
+	    start_thread(regs, mk_ip, mk_sp);
+    } else {
+        start_thread(regs, elf_entry, bprm->p);
+    }
 	retval = 0;
 out:
 	kfree(loc);

@@ -40,6 +40,11 @@
 
 #include <trace/events/module.h>
 
+/*
+ * Multikernel
+ */
+#include <linux/process_server.h>
+
 extern int max_threads;
 
 static struct workqueue_struct *khelper_wq;
@@ -179,12 +184,34 @@ static int ____call_usermodehelper(void *data)
 
 	commit_creds(new);
 
+    /*
+     * Multikernel
+     * Handle delegation case
+     */
+    if (sub_info->delegated) {
+
+        // Copy identity information to current task.
+        current->clone_request_id = sub_info->clone_request_id;
+        current->remote_pid = sub_info->remote_pid;
+        current->remote_cpu = sub_info->remote_cpu;
+        current->executing_for_remote = 1;
+        current->represents_remote = 0;
+        memcpy(&current->remote_regs, &sub_info->remote_regs, sizeof(struct pt_regs) );
+
+        // Notify of PID/PID pairing.
+        process_server_notify_delegated_subprocess_starting(current->pid,sub_info->remote_pid,sub_info->remote_cpu);
+    } 
+
 	retval = kernel_execve(sub_info->path,
 			       (const char *const *)sub_info->argv,
 			       (const char *const *)sub_info->envp);
+    
 
 	/* Exec failed? */
 fail:
+
+    printk("kmod exec failed retval{%d}\n",retval);
+
 	sub_info->retval = retval;
 	do_exit(0);
 }
@@ -370,6 +397,7 @@ struct subprocess_info *call_usermodehelper_setup(char *path, char **argv,
 	sub_info->path = path;
 	sub_info->argv = argv;
 	sub_info->envp = envp;
+    sub_info->delegated = 0;  // multikernel
   out:
 	return sub_info;
 }

@@ -72,6 +72,8 @@
 #include <asm/smpboot_hooks.h>
 #include <asm/i8259.h>
 
+extern unsigned long orig_boot_params;
+
 /* State of each CPU */
 DEFINE_PER_CPU(int, cpu_state) = { 0 };
 
@@ -248,7 +250,7 @@ notrace static void __cpuinit start_secondary(void *unused)
 	 * fragile that we want to limit the things done here to the
 	 * most necessary things.
 	 */
-	cpu_init();
+	cpu_init(0);
 	preempt_disable();
 	smp_callin();
 
@@ -321,7 +323,7 @@ void __cpuinit smp_store_cpu_info(int id)
 
 	*c = boot_cpu_data;
 	c->cpu_index = id;
-	if (id != 0)
+	if (id != first_cpu(cpu_present_map))
 		identify_secondary_cpu(c);
 }
 
@@ -484,7 +486,7 @@ wakeup_secondary_cpu_via_nmi(int logical_apicid, unsigned long start_eip)
 {
 	unsigned long send_status, accept_status = 0;
 	int maxlvt;
-
+	printk(KERN_ERR"%s WANTS LOGICAL %d\n", __func__, logical_apicid);
 	/* Target chip */
 	/* Boot on the stack */
 	/* Kick the second */
@@ -518,7 +520,7 @@ wakeup_secondary_cpu_via_init(int phys_apicid, unsigned long start_eip)
 {
 	unsigned long send_status, accept_status = 0;
 	int maxlvt, num_starts, j;
-
+	printk(KERN_ERR"%s WANTS PHYSICAL %d START ip %lu\n",__func__, phys_apicid, start_eip);
 	maxlvt = lapic_get_maxlvt();
 
 	/*
@@ -663,6 +665,109 @@ static void __cpuinit announce_cpu(int cpu, int apicid)
 		pr_info("Booting Node %d Processor %d APIC 0x%x\n",
 			node, cpu, apicid);
 }
+
+
+
+
+/*
+ * NOTE - on most systems this is a PHYSICAL apic ID, but on multiquad
+ * (ie clustered apic addressing mode), this is a LOGICAL apic ID.
+ * Returns zero if CPU booted OK, else error code from
+ * ->wakeup_secondary_cpu.
+ */
+
+int __cpuinit mkbsp_boot_cpu(int apicid, int cpu, unsigned long kernel_start_address)
+{
+	unsigned long boot_error = 0;
+	unsigned long start_ip;
+	int timeout;
+
+	/* POPCORN -- set physical address where kernel has been copied.
+	   Note that this needs to be written to the location where the
+	   trampoline was copied, not to the location within the original
+	   kernel itself. */
+
+	unsigned long *kernel_virt_addr = TRAMPOLINE_SYM_BSP(&kernel_phys_addr);
+	unsigned long *boot_params_virt_addr = TRAMPOLINE_SYM_BSP(&boot_params_phys_addr);
+	
+	*kernel_virt_addr = kernel_start_address;
+	*boot_params_virt_addr = orig_boot_params;
+
+	/* start_ip had better be page-aligned! */
+	start_ip = trampoline_bsp_address();
+
+	/*
+	 * This grunge runs the startup process for
+	 * the targeted processor.
+	 */
+
+	printk("Popcorn boot: CPU %d: start_ip = %lx\n", cpu, start_ip);
+
+	if (get_uv_system_type() != UV_NON_UNIQUE_APIC) {
+
+		pr_debug("Setting warm reset code and vector.\n");
+
+		smpboot_setup_warm_reset_vector(start_ip);
+		/*
+		 * Be paranoid about clearing APIC errors.
+		*/
+		if (APIC_INTEGRATED(apic_version[boot_cpu_physical_apicid])) {
+			apic_write(APIC_ESR, 0);
+			apic_read(APIC_ESR);
+		}
+	}
+
+	/*
+	 * Kick the secondary CPU. Use the method in the APIC driver
+	 * if it's defined - or use an INIT boot APIC message otherwise:
+	 */
+	if (apic->wakeup_secondary_cpu)
+		boot_error = apic->wakeup_secondary_cpu(apicid, start_ip);
+	else
+		boot_error = wakeup_secondary_cpu_via_init(apicid, start_ip);
+
+	if (!boot_error) {
+
+		/*
+		 * Wait 5s total for a response
+		 */
+		for (timeout = 0; timeout < 50000; timeout++) {
+			udelay(100);
+
+			if (*(volatile u32 *)TRAMPOLINE_SYM_BSP(trampoline_status_bsp)
+			    == 0xA5A5A5A5) {
+				/* trampoline started but...? */
+				pr_info("CPU%d: Trampoline has started.\n", cpu);
+				break;
+			} else {
+				/* trampoline code not run */
+				pr_err("CPU%d: Not responding.\n", cpu);
+				boot_error = 1;
+				if (apic->inquire_remote_apic)
+					apic->inquire_remote_apic(apicid);
+			}
+
+			/*
+                         * Allow other tasks to run while we wait for the
+                         * AP to come online. This also gives a chance
+                         * for the MTRR work(triggered by the AP coming online)
+                         * to be completed in the stop machine context.
+                         */
+                        schedule();
+		}
+	}
+
+	if (boot_error) {
+		pr_err("Popcorn: boot error!!!\n");
+	}
+
+	/* mark "stuck" area as not stuck */
+	*(volatile u32 *)TRAMPOLINE_SYM_BSP(trampoline_status_bsp) = 0;
+
+	return boot_error;
+}
+
+
 
 /*
  * NOTE - on most systems this is a PHYSICAL apic ID, but on multiquad
@@ -918,7 +1023,7 @@ static int __init smp_sanity_check(unsigned max_cpus)
 	preempt_disable();
 
 #if !defined(CONFIG_X86_BIGSMP) && defined(CONFIG_X86_32)
-	if (def_to_bigsmp && nr_cpu_ids > 8) {
+	if (def_to_bigsmp && nr_cpu_idssmp_store_cpu_info > 8) {
 		unsigned int cpu;
 		unsigned nr;
 
@@ -1031,6 +1136,7 @@ static void __init smp_cpu_index_default(void)
 void __init native_smp_prepare_cpus(unsigned int max_cpus)
 {
 	unsigned int i;
+	unsigned int cpu = first_cpu(cpu_present_map);
 
 	preempt_disable();
 	smp_cpu_index_default();
@@ -1038,17 +1144,17 @@ void __init native_smp_prepare_cpus(unsigned int max_cpus)
 	/*
 	 * Setup boot CPU information
 	 */
-	smp_store_cpu_info(0); /* Final full version of the data */
-	cpumask_copy(cpu_callin_mask, cpumask_of(0));
+	smp_store_cpu_info(cpu); /* Final full version of the data */
+	cpumask_copy(cpu_callin_mask, cpumask_of(cpu));
 	mb();
 
-	current_thread_info()->cpu = 0;  /* needed? */
+	current_thread_info()->cpu = cpu;  /* needed? */
 	for_each_possible_cpu(i) {
 		zalloc_cpumask_var(&per_cpu(cpu_sibling_map, i), GFP_KERNEL);
 		zalloc_cpumask_var(&per_cpu(cpu_core_map, i), GFP_KERNEL);
 		zalloc_cpumask_var(&per_cpu(cpu_llc_shared_map, i), GFP_KERNEL);
 	}
-	set_cpu_sibling_map(0);
+	set_cpu_sibling_map(cpu);
 
 
 	if (smp_sanity_check(max_cpus) < 0) {
@@ -1090,8 +1196,8 @@ void __init native_smp_prepare_cpus(unsigned int max_cpus)
 	 * Set up local APIC timer on boot CPU.
 	 */
 
-	printk(KERN_INFO "CPU%d: ", 0);
-	print_cpu_info(&cpu_data(0));
+	printk(KERN_INFO "CPU%d: ", cpu);
+	print_cpu_info(&cpu_data(cpu));
 	x86_init.timers.setup_percpu_clockev();
 
 	if (is_uv_system())
@@ -1157,6 +1263,63 @@ static int __init _setup_possible_cpus(char *str)
 }
 early_param("possible_cpus", _setup_possible_cpus);
 
+static DECLARE_BITMAP(setup_present_bits, CONFIG_NR_CPUS) __read_mostly;
+const struct cpumask *const setup_present_mask = to_cpumask(setup_present_bits);
+
+static int __init _setup_present_mask(char *str)
+{
+	cpulist_parse(str, (struct cpumask *)setup_present_mask);
+	return 0;
+}
+early_param("present_mask", _setup_present_mask);
+
+__init void prefill_present_map(void)
+{
+	int present;
+	int first;
+	char buffer[96];
+	memset(buffer, 0, 96);
+
+	//check present with possible
+	present = cpumask_weight(setup_present_mask);
+	first = cpumask_first(setup_present_mask);
+	// print present mask
+	cpumask_scnprintf(buffer, 96, setup_present_mask);
+	printk(KERN_INFO "%s: present_cpus %d %s, first %d, max_cpus %d\n",
+			__func__, present, buffer, first, setup_max_cpus);
+
+	//we assume that present was never settedif it is 0, prefill it with setup_max_cpus (if setted)
+	if (!present) {
+		int i;
+		for (i=0; i<setup_max_cpus; i++)
+			cpumask_set_cpu(i, (struct cpumask *) setup_present_mask);
+		present = cpumask_weight(setup_present_mask);
+		goto _finalize;
+	}
+
+	// present and setup_max_cpus must be synchronized, setup_max_cpus is imposed by the user
+	// does it affects hot plug? hopefully no
+	if (present != setup_max_cpus)
+		setup_max_cpus = present;
+
+	//figure out which is the current processor and change the present subset accordingly
+	cpumask_copy((struct cpumask *)cpu_present_mask, (struct cpumask *)setup_present_mask);
+
+	//adjust online and active cpu masks
+	cpumask_clear((struct cpumask *)cpu_online_mask);
+	cpumask_set_cpu(first_cpu(cpu_present_map), (struct cpumask *)cpu_online_mask);
+	cpumask_copy((struct cpumask *)cpu_active_mask, (struct cpumask *)cpu_online_mask);
+
+_finalize:
+	// TODO basically a check about the previous setting of cpu_online_mask and cpu_active_mask must be done
+	cpumask_scnprintf(buffer, 96, cpu_present_mask);
+        printk(KERN_INFO "%s: cpu_present_mask %s\n",__func__, buffer);
+        cpumask_scnprintf(buffer, 96, cpu_online_mask);
+        printk(KERN_INFO "%s: cpu_online_mask %s\n",__func__, buffer);
+        cpumask_scnprintf(buffer, 96, cpu_active_mask);
+        printk(KERN_INFO "%s: cpu_active_mask %s\n ",__func__, buffer);
+	return;
+}
 
 /*
  * cpu_possible_mask should be static, it cannot change as cpu's

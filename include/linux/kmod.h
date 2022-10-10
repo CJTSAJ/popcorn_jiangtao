@@ -65,6 +65,16 @@ struct subprocess_info {
 	int (*init)(struct subprocess_info *info, struct cred *new);
 	void (*cleanup)(struct subprocess_info *info);
 	void *data;
+
+    /**
+     * multikernel
+     */
+    int delegated; // Is this subprocess a delegated worker 
+                   // working on behalf of another cpu?
+    pid_t remote_pid;
+    int   remote_cpu;
+    int   clone_request_id;
+    struct pt_regs remote_regs;
 };
 
 /* Allocate a subprocess_info structure */

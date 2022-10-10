@@ -300,7 +300,7 @@ extern void show_stack(struct task_struct *task, unsigned long *sp);
 void io_schedule(void);
 long io_schedule_timeout(long timeout);
 
-extern void cpu_init (void);
+extern void cpu_init (int);
 extern void trap_init(void);
 extern void update_process_times(int user);
 extern void scheduler_tick(void);
@@ -1572,6 +1572,18 @@ struct task_struct {
 #ifdef CONFIG_HAVE_HW_BREAKPOINT
 	atomic_t ptrace_bp_refcnt;
 #endif
+    /*
+     * Multikernel
+     */
+    int represents_remote;      /* Is this a placeholder process? */
+    int executing_for_remote;   /* Is this executing on behalf of another cpu? */
+    int remote_pid;             /* What is the pid on the remote cpu? */
+    int remote_cpu;             /* What is the remote cpu? */
+    int clone_request_id;       /* Number of the clone request id, to match up with
+                                 * address space and other information for this task.
+                                 */
+    struct pt_regs remote_regs; /* regs copied from placeholder process. */
+    unsigned long clone_flags;
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */

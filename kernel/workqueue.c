@@ -3021,11 +3021,9 @@ struct workqueue_struct *__alloc_workqueue_key(const char *name,
 		wq->rescuer = rescuer = alloc_worker();
 		if (!rescuer)
 			goto err;
-
 		rescuer->task = kthread_create(rescuer_thread, wq, "%s", name);
 		if (IS_ERR(rescuer->task))
 			goto err;
-
 		rescuer->task->flags |= PF_THREAD_BOUND;
 		wake_up_process(rescuer->task);
 	}
@@ -3036,7 +3034,6 @@ struct workqueue_struct *__alloc_workqueue_key(const char *name,
 	 * workqueue to workqueues list.
 	 */
 	spin_lock(&workqueue_lock);
-
 	if (workqueue_freezing && wq->flags & WQ_FREEZABLE)
 		for_each_cwq_cpu(cpu, wq)
 			get_cwq(cpu, wq)->max_active = 0;

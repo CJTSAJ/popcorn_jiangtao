@@ -316,16 +316,26 @@ static void __init reserve_brk(void)
 #ifdef CONFIG_BLK_DEV_INITRD
 
 #define MAX_MAP_CHUNK	(NR_FIX_BTMAPS << PAGE_SHIFT)
+#define RAMDISK_MAGIC 0xdf
 static void __init relocate_initrd(void)
 {
 	/* Assume only end is not page aligned */
-	u64 ramdisk_image = boot_params.hdr.ramdisk_image;
+	u64 ramdisk_shift = boot_params.hdr.ramdisk_shift;
+	u64 ramdisk_image;
 	u64 ramdisk_size  = boot_params.hdr.ramdisk_size;
 	u64 area_size     = PAGE_ALIGN(ramdisk_size);
 	u64 end_of_lowmem = max_low_pfn_mapped << PAGE_SHIFT;
 	u64 ramdisk_here;
 	unsigned long slop, clen, mapaddr;
 	char *p, *q;
+
+	/* POPCORN -- the BIOS might not zero out the ramdisk_shift
+	   field, so we need to account for it */
+	if (boot_params.hdr.ramdisk_magic == RAMDISK_MAGIC) {
+		ramdisk_image = boot_params.hdr.ramdisk_image + (ramdisk_shift << 32);
+	} else {
+		ramdisk_image = boot_params.hdr.ramdisk_image;
+	}
 
 	/* We need to move the initrd down into lowmem */
 	ramdisk_here = memblock_find_in_range(0, end_of_lowmem, area_size,
@@ -381,13 +391,29 @@ static void __init relocate_initrd(void)
 static void __init reserve_initrd(void)
 {
 	/* Assume only end is not page aligned */
-	u64 ramdisk_image = boot_params.hdr.ramdisk_image;
+	u64 ramdisk_shift = boot_params.hdr.ramdisk_shift;
+	u64 ramdisk_image;
 	u64 ramdisk_size  = boot_params.hdr.ramdisk_size;
-	u64 ramdisk_end   = PAGE_ALIGN(ramdisk_image + ramdisk_size);
+	u64 ramdisk_end;
 	u64 end_of_lowmem = max_low_pfn_mapped << PAGE_SHIFT;
 
+	/* POPCORN -- the BIOS might not zero out the ramdisk_shift
+	   field, so we need to account for it */
+	if (boot_params.hdr.ramdisk_magic == RAMDISK_MAGIC) {
+		printk("ramdisk magic number is correct (0x%x), applying shift...\n", boot_params.hdr.ramdisk_magic);
+		ramdisk_image = boot_params.hdr.ramdisk_image + (ramdisk_shift << 32);
+	} else {
+		printk("ramdisk magic number is wrong (0x%x)\n", boot_params.hdr.ramdisk_magic);
+		ramdisk_image = boot_params.hdr.ramdisk_image;
+	}
+
+	ramdisk_end = PAGE_ALIGN(ramdisk_image + ramdisk_size);
+
+	printk("ramdisk_image 0x%lx, size 0x%lx, shift 0x%lx, end 0x%lx, end_of_lowmem 0x%lx\n",
+                        ramdisk_image, ramdisk_size, ramdisk_shift, ramdisk_end, end_of_lowmem);
+
 	if (!boot_params.hdr.type_of_loader ||
-	    !ramdisk_image || !ramdisk_size)
+			!ramdisk_image || !ramdisk_size)
 		return;		/* No initrd provided by bootloader */
 
 	initrd_start = 0;
@@ -395,11 +421,11 @@ static void __init reserve_initrd(void)
 	if (ramdisk_size >= (end_of_lowmem>>1)) {
 		memblock_x86_free_range(ramdisk_image, ramdisk_end);
 		printk(KERN_ERR "initrd too large to handle, "
-		       "disabling initrd\n");
+				"disabling initrd\n");
 		return;
 	}
 
-	printk(KERN_INFO "RAMDISK: %08llx - %08llx\n", ramdisk_image,
+	printk(KERN_INFO "RAMDISK: %llx - %llx\n", ramdisk_image,
 			ramdisk_end);
 
 
@@ -409,6 +435,7 @@ static void __init reserve_initrd(void)
 		 * don't need to reserve again, already reserved early
 		 * in i386_start_kernel
 		 */
+		printk("Ramdisk all in lowmem -- easy case\n");
 		initrd_start = ramdisk_image + PAGE_OFFSET;
 		initrd_end = initrd_start + ramdisk_size;
 		return;
@@ -881,12 +908,16 @@ void __init setup_arch(char **cmdline_p)
 
 	check_x2apic();
 
+	printk("max_pfn is 0x%lx\n", max_pfn);
+
 	/* How many end-of-memory variables you have, grandma! */
 	/* need this before calling reserve_initrd */
-	if (max_pfn > (1UL<<(32 - PAGE_SHIFT)))
+	if (max_pfn > (1UL<<(32 - PAGE_SHIFT))) {
+		printk("Setting max_low_pfn to e820_end_of_low_ram_pfn\n");
 		max_low_pfn = e820_end_of_low_ram_pfn();
-	else
+	} else {
 		max_low_pfn = max_pfn;
+	}
 
 	high_memory = (void *)__va(max_pfn * PAGE_SIZE - 1) + 1;
 #endif
@@ -928,8 +959,11 @@ void __init setup_arch(char **cmdline_p)
 			max_pfn_mapped<<PAGE_SHIFT);
 
 	setup_trampolines();
+	setup_trampolines_bsp();
 
 	init_gbpages();
+
+	printk("max_low_pfn 0x%lx, page_shift 0x%lx\n", max_low_pfn, PAGE_SHIFT);
 
 	/* max_pfn_mapped is updated here */
 	max_low_pfn_mapped = init_memory_mapping(0, max_low_pfn<<PAGE_SHIFT);
@@ -1017,7 +1051,8 @@ void __init setup_arch(char **cmdline_p)
 	if (smp_found_config)
 		get_smp_config();
 
-	prefill_possible_map();
+	prefill_possible_map(); // cpu_possible_mask fill with other cpus from setup_possible_cpus, disabled_cpus...
+	prefill_present_map(); // POPCORN -- reset_present_map(); TODO HERE or before prefile_possible in order to set max_cpus from the present_map
 
 	init_cpu_to_node();
 

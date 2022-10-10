@@ -1,0 +1,189 @@
+diff --git a/arch/x86/include/asm/cpu.h b/arch/x86/include/asm/cpu.h
+index 4564c8e..139dcd9 100644
+--- a/arch/x86/include/asm/cpu.h
++++ b/arch/x86/include/asm/cpu.h
+@@ -10,6 +10,7 @@
+ #ifdef CONFIG_SMP
+ 
+ extern void prefill_possible_map(void);
++extern void prefill_present_map(void);
+ 
+ #else /* CONFIG_SMP */
+ 
+diff --git a/arch/x86/include/asm/processor.h b/arch/x86/include/asm/processor.h
+index bb3ee36..4aa33e5 100644
+--- a/arch/x86/include/asm/processor.h
++++ b/arch/x86/include/asm/processor.h
+@@ -774,7 +774,7 @@ extern struct desc_ptr		early_gdt_descr;
+ extern void cpu_set_gdt(int);
+ extern void switch_to_new_gdt(int);
+ extern void load_percpu_segment(int);
+-extern void cpu_init(void);
++extern void cpu_init(int);
+ 
+ static inline unsigned long get_debugctlmsr(void)
+ {
+diff --git a/arch/x86/kernel/i387.c b/arch/x86/kernel/i387.c
+index 739d859..168c22e 100644
+--- a/arch/x86/kernel/i387.c
++++ b/arch/x86/kernel/i387.c
+@@ -93,6 +93,7 @@ void __cpuinit fpu_init(void)
+ {
+ 	unsigned long cr0;
+ 	unsigned long cr4_mask = 0;
++	char buf[96]; memset(buf, 0, 96);
+ 
+ 	if (cpu_has_fxsr)
+ 		cr4_mask |= X86_CR4_OSFXSR;
+@@ -107,7 +108,12 @@ void __cpuinit fpu_init(void)
+ 		cr0 |= X86_CR0_EM;
+ 	write_cr0(cr0);
+ 
+-	if (!smp_processor_id())
++	cpumask_scnprintf(buf, 96, cpu_present_mask);
++	printk("%s: processor id %d (hard id %x)\npresent_map %d %s",
++			__func__, smp_processor_id(), read_apic_id(), first_cpu(cpu_present_map), buf);
++	// original: if (!smp_processor_id())
++	if ((read_apic_id() == boot_cpu_physical_apicid) 
++			&& (smp_processor_id() == first_cpu(cpu_present_map)))
+ 		init_thread_xstate();
+ 
+ 	mxcsr_feature_mask_init();
+diff --git a/arch/x86/kernel/setup_percpu.c b/arch/x86/kernel/setup_percpu.c
+index 71f4727..abe576b 100644
+--- a/arch/x86/kernel/setup_percpu.c
++++ b/arch/x86/kernel/setup_percpu.c
+@@ -170,8 +170,10 @@ void __init setup_per_cpu_areas(void)
+ 	unsigned long delta;
+ 	int rc;
+ 
+-	pr_info("NR_CPUS:%d nr_cpumask_bits:%d nr_cpu_ids:%d nr_node_ids:%d\n",
+-		NR_CPUS, nr_cpumask_bits, nr_cpu_ids, nr_node_ids);
++/*	pr_info("NR_CPUS:%d nr_cpumask_bits:%d nr_cpu_ids:%d nr_node_ids:%d\n",
++			NR_CPUS, nr_cpumask_bits, nr_cpu_ids, nr_node_ids);
++*/	printk("%s NR_CPUS:%d nr_cpumask_bits:%d nr_cpu_ids:%d nr_node_ids:%d\n",
++			__func__, NR_CPUS, nr_cpumask_bits, nr_cpu_ids, nr_node_ids);
+ 
+ 	/*
+ 	 * Allocate percpu area.  Embedding allocator is our favorite;
+@@ -206,12 +208,19 @@ void __init setup_per_cpu_areas(void)
+ 
+ 	/* alrighty, percpu areas up and running */
+ 	delta = (unsigned long)pcpu_base_addr - (unsigned long)__per_cpu_start;
++	printk("%s delta=%lx pcpu_base_addr=%lx __per_cpu_start=%lx\n",
++			__func__, delta, (unsigned long)pcpu_base_addr, (unsigned long)__per_cpu_start);
+ 	for_each_possible_cpu(cpu) {
+ 		per_cpu_offset(cpu) = delta + pcpu_unit_offsets[cpu];
+ 		per_cpu(this_cpu_off, cpu) = per_cpu_offset(cpu);
+ 		per_cpu(cpu_number, cpu) = cpu;
+-		setup_percpu_segment(cpu);
+-		setup_stack_canary_segment(cpu);
++/*		pr_info("CPU%d per_cpu_offset=%x this_cpu_off=%x cpu_number=%d\n",
++				cpu, per_cpu_offset(cpu), per_cpu(this_cpu_off, cpu), per_cpu(cpu_number, cpu));
++*/		printk("%s CPU%d per_cpu_offset=%lx unit_off=%lx cpu_number=%d\n",
++				__func__, cpu, per_cpu_offset(cpu), pcpu_unit_offsets[cpu], per_cpu(cpu_number, cpu));
++
++		setup_percpu_segment(cpu); // only 32bit
++		setup_stack_canary_segment(cpu); // only 32bit
+ 		/*
+ 		 * Copy data used in early init routines from the
+ 		 * initial arrays to the per cpu data areas.  These
+@@ -247,12 +256,19 @@ void __init setup_per_cpu_areas(void)
+ 		 */
+ 		set_cpu_numa_node(cpu, early_cpu_to_node(cpu));
+ #endif
++
+ 		/*
+ 		 * Up to this point, the boot CPU has been using .init.data
+ 		 * area.  Reload any changed state for the boot CPU.
+ 		 */
+-		if (!cpu)
+-			switch_to_new_gdt(cpu);
++		/* POPCORN -- This will happen ONLY if the CPU is booting 
++		 * CPU that do not have to be the ZERO */
++		//if (!cpu) // PREVIOUS CODE
++		if ((read_apic_id() == boot_cpu_physical_apicid)
++				&& (cpu == first_cpu(cpu_present_map))) {
++			printk("boot cpu physical acpiid %d\n", cpu);
++			switch_to_new_gdt(cpu); 
++		}
+ 	}
+ 
+ 	/* indicate the early static arrays will soon be gone */
+diff --git a/arch/x86/kernel/traps.c b/arch/x86/kernel/traps.c
+index 31d9d0f..d4b038f 100644
+--- a/arch/x86/kernel/traps.c
++++ b/arch/x86/kernel/traps.c
+@@ -729,7 +729,7 @@ void __init trap_init(void)
+ 	/*
+ 	 * Should be a barrier for any external CPU state:
+ 	 */
+-	cpu_init();
++	cpu_init(1);
+ 
+ 	x86_init.irqs.trap_init();
+ }
+diff --git a/arch/x86/mm/dump_pagetables.c b/arch/x86/mm/dump_pagetables.c
+index 0002a3a..74b4231 100644
+--- a/arch/x86/mm/dump_pagetables.c
++++ b/arch/x86/mm/dump_pagetables.c
+@@ -29,6 +29,8 @@ struct pg_state {
+ 	pgprot_t current_prot;
+ 	unsigned long start_address;
+ 	unsigned long current_address;
++	unsigned long start_physical;
++	unsigned long current_physical;
+ 	const struct addr_marker *marker;
+ };
+ 
+@@ -139,7 +141,7 @@ static void printk_prot(struct seq_file *m, pgprot_t prot, int level)
+ 		else
+ 			seq_printf(m, "x  ");
+ 	}
+-	seq_printf(m, "%s\n", level_name[level]);
++	seq_printf(m, "%s ", level_name[level]);
+ }
+ 
+ /*
+@@ -200,6 +202,10 @@ static void note_page(struct seq_file *m, struct pg_state *st,
+ 		seq_printf(m, "%9lu%c ", delta, *unit);
+ 		printk_prot(m, st->current_prot, st->level);
+ 
++		seq_printf(m, "0x%0*lx-0x%0*lx\n",
++			   width, st->start_physical,
++			   width, st->current_physical);
++
+ 		/*
+ 		 * We print markers for special areas of address space,
+ 		 * such as the start of vmalloc space etc.
+@@ -210,6 +216,7 @@ static void note_page(struct seq_file *m, struct pg_state *st,
+ 			seq_printf(m, "---[ %s ]---\n", st->marker->name);
+ 		}
+ 
++		st->start_physical = st->current_physical;
+ 		st->start_address = st->current_address;
+ 		st->current_prot = new_prot;
+ 		st->level = level;
+@@ -310,6 +317,7 @@ static void walk_pgd_level(struct seq_file *m)
+ 
+ 	for (i = 0; i < PTRS_PER_PGD; i++) {
+ 		st.current_address = normalize_addr(i * PGD_LEVEL_MULT);
++		st.current_physical = (pgd_val(*start) & (0xFFFFFFFF << PAGE_SHIFT));
+ 		if (!pgd_none(*start)) {
+ 			pgprotval_t prot = pgd_val(*start) & PTE_FLAGS_MASK;
+ 
+@@ -326,12 +334,13 @@ static void walk_pgd_level(struct seq_file *m)
+ 
+ 	/* Flush out the last page */
+ 	st.current_address = normalize_addr(PTRS_PER_PGD*PGD_LEVEL_MULT);
++	st.current_physical = (pgd_val(*start) & (0xFFFFFFFF << PAGE_SHIFT));
+ 	note_page(m, &st, __pgprot(0), 0);
+ }
+ 
+ static int ptdump_show(struct seq_file *m, void *v)
+ {
+-	walk_pgd_level(m);
++	walk_pgd_level(m); //main call
+ 	return 0;
+ }
+ 

@@ -1,0 +1,157 @@
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 1c4f3e9..6fac550 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -300,7 +300,7 @@ extern void show_stack(struct task_struct *task, unsigned long *sp);
+ void io_schedule(void);
+ long io_schedule_timeout(long timeout);
+ 
+-extern void cpu_init (void);
++extern void cpu_init (int);
+ extern void trap_init(void);
+ extern void update_process_times(int user);
+ extern void scheduler_tick(void);
+diff --git a/kernel/Kconfig.popcorn b/kernel/Kconfig.popcorn
+new file mode 100644
+index 0000000..f42b218
+--- /dev/null
++++ b/kernel/Kconfig.popcorn
+@@ -0,0 +1,24 @@
++menu "Popcorn Multi-Kernel Support"
++
++# This is selected by all the architectures Popcorn supports
++config HAVE_POPCORN_ARCH_SUPPORT
++	bool
++
++config POPCORN
++	bool "Popcorn Multi-Kernel Support"
++	depends on HAVE_POPCORN_ARCH_SUPPORT
++	default y
++	help
++		Enable or disable the Popcorn multi-kernel Linux support.
++
++config DEBUG_POPCORN
++	bool "Popcorn debugging messages in kernel log"
++	depends on POPCORN
++	default n
++	help
++		Enable or disable kernel messages that can help debug Popcorn issues.
++
++comment "Popcorn is not currently supported on your architecture"
++	depends on !HAVE_POPCORN_ARCH_SUPPORT
++
++endmenu
+diff --git a/mm/memblock.c b/mm/memblock.c
+index 84bec49..593c052 100644
+--- a/mm/memblock.c
++++ b/mm/memblock.c
+@@ -138,8 +138,13 @@ static phys_addr_t __init_memblock memblock_find_base(phys_addr_t size,
+ 		if (bottom >= top)
+ 			continue;
+ 		found = memblock_find_region(bottom, top, size, align);
+-		if (found != MEMBLOCK_ERROR)
++		if (found != MEMBLOCK_ERROR) {
++			if (found < 0x1000000) {
++				printk("memblock_find_base: BELOW 16 MB, reserved block of size 0x%lx at phys addr 0x%lx\n",
++					size, found);
++			}
+ 			return found;
++		}
+ 	}
+ 	return MEMBLOCK_ERROR;
+ }
+diff --git a/mm/nobootmem.c b/mm/nobootmem.c
+index 7fa41b4..e94421e 100644
+--- a/mm/nobootmem.c
++++ b/mm/nobootmem.c
+@@ -23,6 +23,8 @@
+ 
+ #include "internal.h"
+ 
++#include <linux/multikernel.h>
++
+ #ifndef CONFIG_NEED_MULTIPLE_NODES
+ struct pglist_data __refdata contig_page_data;
+ EXPORT_SYMBOL(contig_page_data);
+@@ -43,6 +45,10 @@ static void * __init __alloc_memory_core_early(int nid, u64 size, u64 align,
+ 
+ 	addr = find_memory_core_early(nid, size, align, goal, limit);
+ 
++	if (addr < 0x1000000) {
++		printk("Allocated bootmem below 16 MB, address 0x%lx\n", addr);
++	}
++
+ 	if (addr == MEMBLOCK_ERROR)
+ 		return NULL;
+ 
+@@ -241,8 +247,9 @@ static void * __init ___alloc_bootmem(unsigned long size, unsigned long align,
+ {
+ 	void *mem = ___alloc_bootmem_nopanic(size, align, goal, limit);
+ 
+-	if (mem)
++	if (mem) 
+ 		return mem;
++
+ 	/*
+ 	 * Whoops, we cannot satisfy the allocation request.
+ 	 */
+@@ -352,6 +359,8 @@ void * __init __alloc_bootmem_node_nopanic(pg_data_t *pgdat, unsigned long size,
+ #define ARCH_LOW_ADDRESS_LIMIT	0xffffffffUL
+ #endif
+ 
++#define ARCH_LOW_ADDRESS_LIMIT_64 0xffffffffffffffffULL
++
+ /**
+  * __alloc_bootmem_low - allocate low boot memory
+  * @size: size of the request in bytes
+@@ -368,7 +377,11 @@ void * __init __alloc_bootmem_node_nopanic(pg_data_t *pgdat, unsigned long size,
+ void * __init __alloc_bootmem_low(unsigned long size, unsigned long align,
+ 				  unsigned long goal)
+ {
+-	return ___alloc_bootmem(size, align, goal, ARCH_LOW_ADDRESS_LIMIT);
++	if (mklinux_boot) {
++		return ___alloc_bootmem(size, align, goal, ARCH_LOW_ADDRESS_LIMIT_64);
++	} else {
++		return ___alloc_bootmem(size, align, goal, ARCH_LOW_ADDRESS_LIMIT);
++	}
+ }
+ 
+ /**
+diff --git a/mm/percpu.c b/mm/percpu.c
+index 716eb4a..c49182b 100644
+--- a/mm/percpu.c
++++ b/mm/percpu.c
+@@ -1129,12 +1129,12 @@ static void pcpu_dump_alloc_info(const char *lvl,
+ 				printk("\n");
+ 				printk("%spcpu-alloc: ", lvl);
+ 			}
+-			printk("[%0*d] ", group_width, group);
++			printk("[%0*d] ", group_width, group); // print group id
+ 
+ 			for (unit_end += upa; unit < unit_end; unit++)
+ 				if (gi->cpu_map[unit] != NR_CPUS)
+ 					printk("%0*d ", cpu_width,
+-					       gi->cpu_map[unit]);
++					       gi->cpu_map[unit]); // print cpuid of each element in the group
+ 				else
+ 					printk("%s ", empty_str);
+ 		}
+@@ -1471,7 +1471,8 @@ static struct pcpu_alloc_info * __init pcpu_build_alloc_info(
+ 	/* group cpus according to their proximity */
+ 	for_each_possible_cpu(cpu) {
+ 		group = 0;
+-	next_group:
++	/* POPCORN -- this should be commented out */
++/*	next_group:
+ 		for_each_possible_cpu(tcpu) {
+ 			if (cpu == tcpu)
+ 				break;
+@@ -1483,7 +1484,7 @@ static struct pcpu_alloc_info * __init pcpu_build_alloc_info(
+ 				goto next_group;
+ 			}
+ 		}
+-		group_map[cpu] = group;
++*/		group_map[cpu] = group;
+ 		group_cnt[group]++;
+ 	}
+ 

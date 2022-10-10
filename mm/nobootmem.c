@@ -23,6 +23,8 @@
 
 #include "internal.h"
 
+#include <linux/multikernel.h>
+
 #ifndef CONFIG_NEED_MULTIPLE_NODES
 struct pglist_data __refdata contig_page_data;
 EXPORT_SYMBOL(contig_page_data);
@@ -42,6 +44,10 @@ static void * __init __alloc_memory_core_early(int nid, u64 size, u64 align,
 		limit = memblock.current_limit;
 
 	addr = find_memory_core_early(nid, size, align, goal, limit);
+
+	if (addr < 0x1000000) {
+		printk("Allocated bootmem below 16 MB, address 0x%lx\n", addr);
+	}
 
 	if (addr == MEMBLOCK_ERROR)
 		return NULL;
@@ -241,8 +247,9 @@ static void * __init ___alloc_bootmem(unsigned long size, unsigned long align,
 {
 	void *mem = ___alloc_bootmem_nopanic(size, align, goal, limit);
 
-	if (mem)
+	if (mem) 
 		return mem;
+
 	/*
 	 * Whoops, we cannot satisfy the allocation request.
 	 */
@@ -352,6 +359,8 @@ void * __init __alloc_bootmem_node_nopanic(pg_data_t *pgdat, unsigned long size,
 #define ARCH_LOW_ADDRESS_LIMIT	0xffffffffUL
 #endif
 
+#define ARCH_LOW_ADDRESS_LIMIT_64 0xffffffffffffffffULL
+
 /**
  * __alloc_bootmem_low - allocate low boot memory
  * @size: size of the request in bytes
@@ -368,7 +377,11 @@ void * __init __alloc_bootmem_node_nopanic(pg_data_t *pgdat, unsigned long size,
 void * __init __alloc_bootmem_low(unsigned long size, unsigned long align,
 				  unsigned long goal)
 {
-	return ___alloc_bootmem(size, align, goal, ARCH_LOW_ADDRESS_LIMIT);
+	if (mklinux_boot) {
+		return ___alloc_bootmem(size, align, goal, ARCH_LOW_ADDRESS_LIMIT_64);
+	} else {
+		return ___alloc_bootmem(size, align, goal, ARCH_LOW_ADDRESS_LIMIT);
+	}
 }
 
 /**

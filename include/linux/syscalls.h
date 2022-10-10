@@ -857,4 +857,13 @@ asmlinkage long sys_process_vm_writev(pid_t pid,
 				      unsigned long riovcnt,
 				      unsigned long flags);
 
+asmlinkage long sys_multikernel_boot(int cpu,
+				     unsigned long kernel_start_address);
+
+asmlinkage long sys_get_boot_params_addr(void);
+
+asmlinkage long sys_popcorn_test_kmsg(int cpu);
+
+asmlinkage long sys_popcorn_test_ipi_latency(int cpu);
+
 #endif

@@ -96,6 +96,10 @@ static inline void mark_rodata_ro(void) { }
 extern void tc_init(void);
 #endif
 
+#ifdef CONFIG_POPCORN_KMSG
+extern void pcn_kmsg_init(void);
+#endif
+
 /*
  * Debug helper: via this flag we know that we are in 'early bootup code'
  * where only the boot processor is running with IRQ disabled.  This means
@@ -500,7 +504,7 @@ asmlinkage void __init start_kernel(void)
 	mm_init_owner(&init_mm, &init_task);
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
-	setup_nr_cpu_ids();
+	setup_nr_cpu_ids(); //requires cpu_possible_mask setted up (in setup_arch, acpi_boot_init)
 	setup_per_cpu_areas();
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
 
@@ -638,6 +642,10 @@ asmlinkage void __init start_kernel(void)
 	sfi_init_late();
 
 	ftrace_init();
+
+#ifdef CONFIG_POPCORN_KMSG
+	//pcn_kmsg_init();
+#endif
 
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();

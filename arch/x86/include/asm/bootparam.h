@@ -57,7 +57,9 @@ struct setup_header {
 	__u32	initrd_addr_max;
 	__u32	kernel_alignment;
 	__u8	relocatable_kernel;
-	__u8	_pad2[3];
+	__u8	ramdisk_shift;
+	__u8    ramdisk_magic;
+	__u8	_pad2[1];
 	__u32	cmdline_size;
 	__u32	hardware_subarch;
 	__u64	hardware_subarch_data;
@@ -117,7 +119,8 @@ struct boot_params {
 	struct e820entry e820_map[E820MAX];		/* 0x2d0 */
 	__u8  _pad8[48];				/* 0xcd0 */
 	struct edd_info eddbuf[EDDMAXNR];		/* 0xd00 */
-	__u8  _pad9[276];				/* 0xeec */
+	__u8  _pad9[268];				/* 0xeec */
+	__u64  pcn_kmsg_master_window;
 } __attribute__((packed));
 
 enum {
